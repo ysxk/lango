@@ -1,0 +1,11 @@
+**
+!server/
+!server/**
+server/.venv/
+server/.pytest_cache/
+server/.ruff_cache/
+server/**/__pycache__/
+server/data/
+server/.env*
+server/tests/
+server/**/*.db
