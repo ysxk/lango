@@ -175,8 +175,6 @@ class Actor:
 
     async def begin(self, *, text=None, pcm=None, persist_user=True):
         rate_limit(self.factory, self.settings, "turn", self.user_id, 30, 60)
-        await self.cancel()
-        self.audio.clear()
         if self.charge():
             raise HTTPException(429, "Daily practice limit reached")
         with self.factory.begin() as db:
@@ -185,6 +183,9 @@ class Actor:
             )
             if count >= 400:
                 raise HTTPException(429, "Session turn limit reached; start a new session")
+        await self.cancel()
+        self.audio.clear()
+        with self.factory.begin() as db:
             user = db.get(User, self.user_id)
             profile = schemas.profile(user)
             memories = context_memories(db, user)
@@ -255,7 +256,9 @@ class Actor:
                     if event["kind"] == "transcript" and learner_id:
                         with self.factory.begin() as db:
                             db.get(Turn, learner_id).text = event["text"][:4000]
-                        await self.send("input.transcript", text=event["text"][:4000])
+                        await self.send(
+                            "input.transcript", turn_id=learner_id, text=event["text"][:4000]
+                        )
                     elif event["kind"] == "text":
                         response.text += event["text"]
                         if len(response.text) > 6000:
@@ -469,9 +472,22 @@ class Actor:
                 except (ValidationError, json.JSONDecodeError, RecursionError):
                     await self.error("invalid_input", "Invalid message or input bounds.")
                 except HTTPException as exc:
-                    await self.error(
-                        "rate_limit" if exc.status_code == 429 else "invalid_input", exc.detail
+                    detail = str(exc.detail)
+                    if "Session turn limit" in detail:
+                        code = "session_full"
+                        retryable = False
+                    elif exc.status_code == 429:
+                        code = "rate_limit"
+                        retryable = "Daily practice limit" not in detail
+                    else:
+                        code = "invalid_input"
+                        retryable = False
+                    await self.send(
+                        "input.rejected", code=code, message=detail, retryable=retryable
                     )
+                    await self.error(code, detail, retryable=retryable)
+                    if code != "session_full":
+                        await self.send("state", state="listening")
         except (WebSocketDisconnect, TimeoutError, RuntimeError):
             pass
         except Exception:

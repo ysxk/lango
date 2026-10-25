@@ -113,14 +113,15 @@ An ASGI deployment command, behind a trusted TLS reverse proxy, is:
 
 ```sh
 uv run uvicorn lango.main:app --host 0.0.0.0 --port 8000 \
-  --no-access-log --ws-max-size 65536 --ws-max-queue 16
+  --no-access-log --ws-max-size 65536 --ws-max-queue 16 \
+  --forwarded-allow-ips "${LANGO_TRUSTED_PROXIES:-127.0.0.1,172.28.0.10}"
 ```
 
 Do not expose this plain HTTP listener to the public Internet. Enforce HTTPS/WSS at the
 proxy, allow WebSocket upgrades, bound request bodies, and use sufficiently long WebSocket
 idle timeouts. Configure proxy access logging to **omit query strings** (tickets are URL
 credentials); application access logging is disabled and SDK/provider logs are suppressed.
-Only trust forwarded client addresses from your actual proxy. Configure exact browser
+Only trust forwarded client addresses from your actual proxy (`--forwarded-allow-ips` and `LANGO_TRUSTED_PROXIES`). Do not trust arbitrary XFF or use wildcards on publicly reachable listeners, so client rate-limiting isolates distinct callers without allowing IP spoofing. Configure exact browser
 origins including any nonstandard port; WebSocket origins are checked even for same-origin
 browser deployments. Native clients without `Origin` are allowed but still require a ticket.
 LAN HTTP is suitable only on explicitly trusted networks; it exposes credentials/audio

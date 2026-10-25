@@ -151,6 +151,62 @@ def test_concurrent_refresh_replay_revokes_family(env):
     )
 
 
+def test_logout_without_bearer_and_rotated_token_revokes_family(env):
+    user1 = register(env)
+    rotate_res = env.client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": user1.pair["refresh_token"]}
+    )
+    assert rotate_res.status_code == 200
+    user1_rotated = rotate_res.json()
+    user2 = register(env, email="learner2@example.com")
+
+    user1_new_headers = {"Authorization": f"Bearer {user1_rotated['access_token']}"}
+    assert env.client.get("/api/v1/me", headers=user1_new_headers).status_code == 200
+    assert env.client.get("/api/v1/me", headers=user2.headers).status_code == 200
+
+    logout_res = env.client.post(
+        "/api/v1/auth/logout",
+        json={"refresh_token": user1.pair["refresh_token"]},
+    )
+    assert logout_res.status_code == 200
+    assert logout_res.json() == {"ok": True}
+
+    assert env.client.get("/api/v1/me", headers=user1.headers).status_code == 401
+    assert env.client.get("/api/v1/me", headers=user1_new_headers).status_code == 401
+    assert (
+        env.client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": user1.pair["refresh_token"]}
+        ).status_code
+        == 401
+    )
+    assert (
+        env.client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": user1_rotated["refresh_token"]}
+        ).status_code
+        == 401
+    )
+
+    assert env.client.get("/api/v1/me", headers=user2.headers).status_code == 200
+    assert (
+        env.client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": user2.pair["refresh_token"]}
+        ).status_code
+        == 200
+    )
+
+
+def test_logout_unknown_token_is_idempotent(env):
+    user = register(env)
+    unknown_token = "x" * 48
+    logout_res = env.client.post(
+        "/api/v1/auth/logout",
+        json={"refresh_token": unknown_token},
+    )
+    assert logout_res.status_code == 200
+    assert logout_res.json() == {"ok": True}
+    assert env.client.get("/api/v1/me", headers=user.headers).status_code == 200
+
+
 @pytest.mark.parametrize(
     "patch",
     [
@@ -254,3 +310,34 @@ def test_ticket_stored_only_as_hash(env):
         ticket = db.scalar(select(Ticket))
         assert ticket.digest == digest(response["ticket"])
         assert ticket.user_id == user.id and not ticket.used
+
+
+def test_refresh_and_logout_lock_owner_before_mutating_family(env):
+    from sqlalchemy import Select, Update, event
+    from sqlalchemy.dialects.postgresql import dialect
+
+    user = register(env)
+    statements = []
+
+    def record_statement(conn, statement, multiparams, params, options):
+        if isinstance(statement, (Select, Update)):
+            statements.append(str(statement.compile(dialect=dialect())))
+
+    event.listen(env.engine, "before_execute", record_statement)
+    try:
+        for action in ("refresh", "logout"):
+            statements.clear()
+            response = env.client.post(
+                f"/api/v1/auth/{action}",
+                json={"refresh_token": user.pair["refresh_token"]},
+            )
+            assert response.status_code == 200
+            lock_index = next(
+                i for i, sql in enumerate(statements) if "FROM users" in sql and "FOR UPDATE" in sql
+            )
+            update_index = next(
+                i for i, sql in enumerate(statements) if sql.startswith("UPDATE refresh_tokens")
+            )
+            assert lock_index < update_index
+    finally:
+        event.remove(env.engine, "before_execute", record_statement)

@@ -15,7 +15,6 @@ from lango.config import VOICES, Settings
 from lango.db import (
     Invite,
     MemoryItem,
-    Refresh,
     TalkSession,
     Ticket,
     Turn,
@@ -38,6 +37,7 @@ from lango.security import (
     issue_pair,
     passwords,
     rate_limit,
+    revoke_family,
     rotate,
     verify_password,
 )
@@ -195,11 +195,9 @@ def create_app(settings: Settings | None = None, *, engine=None, database=None):
         return rotate(factory, settings, body.refresh_token)
 
     @router.post("/auth/logout")
-    def logout(body: schemas.RefreshBody, user: AuthUser):
-        with factory.begin() as db:
-            row = db.get(Refresh, digest(body.refresh_token))
-            if row and row.user_id == user.id:
-                db.execute(update(Refresh).where(Refresh.family == row.family).values(revoked=True))
+    def logout(body: schemas.RefreshBody, request: Request):
+        auth_limit(request)
+        revoke_family(factory, body.refresh_token)
         return {"ok": True}
 
     @router.get("/me")

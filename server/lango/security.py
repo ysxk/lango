@@ -109,6 +109,8 @@ def rotate(factory, settings, token: str):
     with factory.begin() as db:
         row = db.get(Refresh, digest(token))
         if row and not row.revoked and row.expires_at > now():
+            # Serialize rotations and family revocation across API processes.
+            db.execute(select(User.id).where(User.id == row.user_id).with_for_update())
             consumed = db.execute(
                 update(Refresh)
                 .where(
@@ -125,6 +127,14 @@ def rotate(factory, settings, token: str):
     if result is None:
         raise HTTPException(401, "Refresh token is invalid or expired")
     return result
+
+
+def revoke_family(factory, token: str) -> None:
+    with factory.begin() as db:
+        row = db.get(Refresh, digest(token))
+        if row:
+            db.execute(select(User.id).where(User.id == row.user_id).with_for_update())
+            db.execute(update(Refresh).where(Refresh.family == row.family).values(revoked=True))
 
 
 def create_invite(db, max_uses=1, hours=72):

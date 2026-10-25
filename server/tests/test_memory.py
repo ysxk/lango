@@ -344,3 +344,137 @@ def test_explicit_delete_while_paused_is_not_restored_by_reenabling(env):
     while worker.run_once():
         pass
     assert env.client.get("/api/v1/memories", headers=user.headers).json()["items"] == []
+
+
+def test_enqueue_session_101_turns_and_no_text_truncation(env):
+    user = register(env)
+    with env.db.begin() as db:
+        session = TalkSession(user_id=user.id, title="Practice", engine="cascade")
+        db.add(session)
+        db.flush()
+        long_text = "preference-" + "X" * 5000 + "-END_TOKEN"
+        for i in range(105):
+            if i == 100:
+                text = "fact-101"
+            elif i == 104:
+                text = long_text
+            else:
+                text = f"fact-{i}"
+            db.add(Turn(session_id=session.id, role="user", text=text))
+        db.flush()
+        enqueue_session(db, session, 0)
+
+    with env.db() as db:
+        jobs = list(
+            db.scalars(
+                select(MemoryJob)
+                .where(MemoryJob.user_id == user.id)
+                .order_by(MemoryJob.available_at, MemoryJob.id)
+            ).all()
+        )
+        assert len(jobs) == 2
+        messages_0 = jobs[0].payload.get("messages", [])
+        messages_1 = jobs[1].payload.get("messages", [])
+        assert len(messages_0) == 100
+        assert len(messages_1) == 5
+        assert messages_1[0]["content"] == "fact-101"
+        assert messages_1[4]["content"].endswith("-END_TOKEN")
+        assert len(messages_1[4]["content"]) == len(long_text)
+
+
+def test_enqueue_session_connection_boundary_and_reconnect(env):
+    user = register(env)
+    with env.db.begin() as db:
+        session = TalkSession(user_id=user.id, title="Practice", engine="cascade")
+        db.add(session)
+        db.flush()
+        t1 = now() + 10.0
+        db.add(Turn(session_id=session.id, role="user", text="turn-1", created_at=t1 + 1))
+        db.add(Turn(session_id=session.id, role="user", text="turn-2", created_at=t1 + 2))
+        db.flush()
+        enqueue_session(db, session, t1)
+
+    with env.db() as db:
+        jobs = list(
+            db.scalars(
+                select(MemoryJob)
+                .where(MemoryJob.user_id == user.id)
+                .order_by(MemoryJob.available_at, MemoryJob.id)
+            ).all()
+        )
+        assert len(jobs) == 1
+        assert [m["content"] for m in jobs[0].payload["messages"]] == ["turn-1", "turn-2"]
+
+    with env.db.begin() as db:
+        session = db.get(TalkSession, session.id)
+        t2 = t1 + 100.0
+        db.add(Turn(session_id=session.id, role="user", text="turn-3", created_at=t2 + 1))
+        db.flush()
+        enqueue_session(db, session, t2)
+    with env.db() as db:
+        jobs = list(
+            db.scalars(
+                select(MemoryJob)
+                .where(MemoryJob.user_id == user.id)
+                .order_by(MemoryJob.available_at, MemoryJob.id)
+            ).all()
+        )
+        assert len(jobs) == 2
+        assert [m["content"] for m in jobs[1].payload["messages"]] == ["turn-3"]
+
+
+def test_enqueue_session_scenario_exclusion(env):
+    user = register(env)
+    with env.db.begin() as db:
+        session = TalkSession(
+            user_id=user.id, title="Scenario", engine="cascade", scenario_id="restaurant"
+        )
+        db.add(session)
+        db.flush()
+        db.add(Turn(session_id=session.id, role="user", text="I want coffee."))
+        db.flush()
+        enqueue_session(db, session, 0)
+
+    with env.db() as db:
+        jobs = list(db.scalars(select(MemoryJob).where(MemoryJob.user_id == user.id)).all())
+        assert len(jobs) == 0
+
+
+def test_enqueue_session_memory_disabled_and_resumed_time_boundary(env):
+    user = register(env)
+    env.client.patch("/api/v1/me", headers=user.headers, json={"memory_enabled": False})
+    with env.db.begin() as db:
+        session = TalkSession(user_id=user.id, title="Practice", engine="cascade")
+        db.add(session)
+        db.flush()
+        db.add(Turn(session_id=session.id, role="user", text="Spoken while paused"))
+        db.flush()
+        enqueue_session(db, session, 0)
+
+    with env.db() as db:
+        jobs = list(
+            db.scalars(
+                select(MemoryJob).where(MemoryJob.user_id == user.id, MemoryJob.kind == "ingest")
+            ).all()
+        )
+        assert len(jobs) == 0
+
+    env.client.patch("/api/v1/me", headers=user.headers, json={"memory_enabled": True})
+    with env.db.begin() as db:
+        db_user = db.get(User, user.id)
+        t_after = db_user.memory_since + 10.0
+        db.add(
+            Turn(session_id=session.id, role="user", text="Spoken after resume", created_at=t_after)
+        )
+        db.flush()
+        enqueue_session(db, session, 0)
+
+    with env.db() as db:
+        jobs = list(
+            db.scalars(
+                select(MemoryJob).where(MemoryJob.user_id == user.id, MemoryJob.kind == "ingest")
+            ).all()
+        )
+        assert len(jobs) == 1
+        messages = jobs[0].payload.get("messages", [])
+        assert [m["content"] for m in messages] == ["Spoken after resume"]

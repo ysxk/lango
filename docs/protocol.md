@@ -1,6 +1,6 @@
 # Lango API contract v1
 
-All REST paths start with `/api/v1`, return JSON, and use `Authorization: Bearer <access_token>` except health, login, refresh and register. Errors use `{detail: string}`. IDs are opaque strings. Dates are UTC ISO-8601. No provider credentials or model IDs are sent to clients.
+All REST paths start with `/api/v1`, return JSON, and use `Authorization: Bearer <access_token>` except health, login, refresh, register and logout. Errors use `{detail: string}`. IDs are opaque strings. Dates are UTC ISO-8601. No provider credentials or model IDs are sent to clients.
 
 ## REST
 
@@ -8,7 +8,7 @@ All REST paths start with `/api/v1`, return JSON, and use `Authorization: Bearer
 - `POST /auth/register` `{email,password,display_name,invite_code}` → TokenPair.
 - `POST /auth/login` `{email,password}` → TokenPair.
 - `POST /auth/refresh` `{refresh_token}` → rotated TokenPair.
-- `POST /auth/logout` `{refresh_token}` → `{ok:true}`.
+- `POST /auth/logout` `{refresh_token}` → `{ok:true}`. Revokes token family identified by refresh token without requiring Authorization.
 - TokenPair: `{access_token,refresh_token,token_type:"bearer"}`.
 - `GET /me` → Profile.
 - `PATCH /me` accepts mutable Profile fields → Profile.
@@ -47,7 +47,8 @@ Client binary: raw mono signed little-endian PCM16 at 16000 Hz. Only current lea
 Server JSON:
 - `session.created {session_id,audio:{input_rate:16000,output_rate:24000}}`.
 - `state {state:"listening"|"thinking"|"speaking"}`.
-- `input.transcript {text}`.
+- `input.transcript {text,turn_id:string}`: cumulative transcript for this learner turn, not a text delta. Replace the matching turn's text; different turn IDs remain distinct even if their text is identical.
+- `input.rejected {code,message,retryable}`: input was not accepted before response generation. Recover from temporary rejection without waiting for `response.done`; `session_full` requires ending this session. Keep rejected local text visibly marked as unsaved, not as persisted history.
 - `response.started {response_id}`.
 - `response.text {response_id,text}`: text delta; append for captions.
 - `response.audio {response_id,sequence,text,audio,mime_type:"audio/wav"}`: independent playable WAV segment, base64 encoded. Ordered monotonically from sequence 0. `text` is the phrase corresponding to this segment; may be empty for native audio fragments. Player must ignore frames from cancelled responses and acknowledge completed segments only. Queue playback; do not overlap clips.

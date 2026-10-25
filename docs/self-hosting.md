@@ -21,14 +21,14 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml exec server \
   lango create-admin --email you@example.com --display-name 管理员
 ```
 
-管理员密码由隐藏输入提示读取，要求 10–128 个字符。然后通过 App 登录管理员账号，在设置中生成邀请码，或使用：
+管理员密码由隐藏输入提示读取，要求 10–128 个字符。管理员账号可用于后续客户端登录，也可直接通过命令行生成邀请码：
 
 ```sh
 docker compose --env-file deploy/.env -f deploy/compose.yaml exec server \
   lango invite --email you@example.com --max-uses 1 --hours 72
 ```
 
-默认 `127.0.0.1:8000` 不向其他机器开放。要给同一可信 Wi-Fi 下的手机使用，将 `.env` 中 `BIND_ADDRESS=0.0.0.0`，重新 `up -d`，App 服务器填写 `http://电脑局域网IP:8000`。防火墙仅允许可信局域网。**HTTP 不加密密码、令牌、音频；不能在公网或不可信 Wi-Fi 使用。** 日常使用优先 HTTPS。
+默认 `127.0.0.1:8000` 不向其他机器开放。要给同一可信 Wi-Fi 下的客户端使用，将 `.env` 中 `BIND_ADDRESS=0.0.0.0`，重新 `up -d`，客户端连接地址填写 `http://电脑局域网IP:8000`。防火墙仅允许可信局域网。**HTTP 不加密密码、令牌、音频；不能在公网或不可信 Wi-Fi 使用。** 日常使用优先 HTTPS。
 
 Android 真机通过 USB 调试也可运行 `adb reverse tcp:8000 tcp:8000`，App 填 `http://127.0.0.1:8000`；Android 模拟器访问宿主机通常使用 `http://10.0.2.2:8000`。
 
@@ -52,7 +52,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml --profile public up
 curl https://lango.example.com/healthz
 ```
 
-App 填 `https://lango.example.com`。Caddy 负责 TLS 与 WebSocket 代理。若另行托管 Web 客户端，把它的完整 HTTPS origin 加入 `LANGO_ALLOWED_ORIGINS`，不能使用通配符。Caddy 默认不打开访问日志，避免记录一次性 WS ticket；如果自加代理日志，必须移除 URL 查询参数。
+客户端填 `https://lango.example.com`。Caddy 负责 TLS 与 WebSocket 代理，在 Compose 内部网络固定分配 `172.28.0.10`。Docker 启动命令把 `LANGO_TRUSTED_PROXIES` 传给 Uvicorn，仅采信可信代理的转发头，让外网各客户端独立限流；非可信直连不能靠伪造 `X-Forwarded-For` 更换限流身份。若 `172.28.0.0/16` 与已有网络冲突，请同时调整 Compose 子网、Caddy 固定地址和可信代理配置。若另行托管 Web 客户端，把它的完整 HTTPS origin 加入 `LANGO_ALLOWED_ORIGINS`，不能使用通配符。Caddy 默认不打开访问日志，避免记录一次性 WS ticket；如果自加代理日志，必须移除 URL 查询参数。
 
 ## 配置
 
@@ -67,6 +67,7 @@ App 填 `https://lango.example.com`。Caddy 负责 TLS 与 WebSocket 代理。�
 | `LANGO_DAILY_MINUTES` | 每用户每日语音时间配额，默认 60；不是精确的货币预算 |
 | `LANGO_ALLOWED_ORIGINS` | JSON 数组，匹配浏览器 origin；原生客户端不依赖 CORS |
 | `LANGO_JWT_SECRET` | 至少 32 字符的随机服务端签名密钥 |
+| `LANGO_TRUSTED_PROXIES` | Docker 启动命令使用的可信反向代理 IP/CIDR（逗号分隔），默认 `127.0.0.1,172.28.0.10`（回环及 Caddy 容器）。仅可信来源的转发头会被采信；不要在可直接访问的监听器上设为 `*`。不用 Docker 时须显式配置 Uvicorn `--forwarded-allow-ips` |
 
 模型参数与更多限制见 [服务端说明](../server/README.md)。更换模型 ID 前需要验证输入/输出能力与 SDK 参数，不能仅凭名字推断双向音频。修改 `.env` 后重新执行 `up -d`，仅 `restart` 不会重新注入环境变量。
 
@@ -85,7 +86,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml stop
 
 ## 本地开发与排错
 
-详见 [服务端 README](../server/README.md) 和 [App README](../app/README.md)。Flutter Web 调试需要把开发服务器 origin（例如 `http://127.0.0.1:8080`）加入服务端白名单；麦克风仅在安全上下文（HTTPS 或 localhost）可用。
+详见 [服务端说明](../server/README.md) 与 [接口与语音协议](protocol.md)。客户端代码当前标记为未开发，可根据协议标准自建客户端。Web 客户端调试时需把访问 origin（例如 `http://127.0.0.1:8080`）加入服务端白名单。
 
 - 登录连接失败：检查手机到服务端网络、端口、防火墙、TLS 证书与 URL，不要关闭证书校验。
 - API 启动失败：检查 JWT 随机密钥、数据库连接、迁移、生产环境 HTTPS origin。

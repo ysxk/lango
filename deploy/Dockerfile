@@ -11,4 +11,4 @@ RUN uv sync --frozen --no-dev && \
     mkdir -p /data/memory && chown -R lango:lango /data
 USER 10001:10001
 EXPOSE 8000
-CMD ["sh", "-c", "python -m lango.migrate && exec uvicorn lango.main:app --host 0.0.0.0 --port 8000 --no-access-log --ws-max-size 65536 --ws-max-queue 16"]
+CMD ["sh", "-c", "python -m lango.migrate && exec uvicorn lango.main:app --host 0.0.0.0 --port 8000 --no-access-log --ws-max-size 65536 --ws-max-queue 16 --forwarded-allow-ips \"${LANGO_TRUSTED_PROXIES:-127.0.0.1,172.28.0.10}\""]

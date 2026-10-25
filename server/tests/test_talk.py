@@ -156,7 +156,9 @@ def test_new_binary_turn_interrupts_and_input_cancel_discards(env):
         env.fake.wait = False
         ws.send_bytes(b"\x00\x00" * 100)
         ws.send_json({"type": "input.commit"})
-        assert receive(ws, "input.transcript")["text"] == "I enjoy hiking."
+        t_msg = receive(ws, "input.transcript")
+        assert t_msg["text"] == "I enjoy hiking."
+        assert t_msg.get("turn_id") is not None
         # response.started precedes the transcript, so consume the rest directly.
         audio = [receive(ws, "response.audio"), receive(ws, "response.audio")]
         done = receive(ws, "response.done")
@@ -385,3 +387,79 @@ def test_resumed_session_keeps_engine_and_scenario(env):
         assert "original engine" in receive(ws, "error")["message"]
         assert start(ws, session_id=sid) == sid
         end(ws)
+
+
+def test_input_rejected_and_session_full(env):
+    user = register(env)
+    with env.client.websocket_connect(ticket(env, user)) as ws:
+        sid = start(ws)
+        complete(ws)
+        # Fill session with 400 turns
+        with env.db.begin() as db:
+            for _ in range(400):
+                db.add(Turn(session_id=sid, role="user", text="test"))
+        ws.send_json({"type": "text.input", "text": "Will be rejected due to session limit"})
+        rejected = receive(ws, "input.rejected")
+        assert rejected["code"] == "session_full"
+        assert rejected["retryable"] is False
+        assert "Session turn limit" in rejected["message"]
+        err = receive(ws, "error")
+        assert err["code"] == "session_full"
+        end(ws)
+
+
+def test_rejected_turn_recovers_without_response_done(env, monkeypatch):
+    from fastapi import HTTPException
+
+    from lango import talk
+
+    original_limit = talk.rate_limit
+    blocked = False
+
+    def limit(*args):
+        if blocked:
+            raise HTTPException(429, "Too many requests; try again later")
+        return original_limit(*args)
+
+    monkeypatch.setattr(talk, "rate_limit", limit)
+    user = register(env)
+    with env.client.websocket_connect(ticket(env, user)) as ws:
+        sid = start(ws)
+        complete(ws)
+        blocked = True
+        ws.send_json({"type": "text.input", "text": "Rejected input"})
+        rejected = receive(ws, "input.rejected")
+        assert rejected["code"] == "rate_limit" and rejected["retryable"]
+        assert receive(ws, "error")["code"] == "rate_limit"
+        assert receive(ws, "state")["state"] == "listening"
+        blocked = False
+        ws.send_json({"type": "text.input", "text": "Accepted input"})
+        complete(ws)
+        end(ws)
+    turns = detail(env, user, sid)["turns"]
+    assert [turn["text"] for turn in turns if turn["role"] == "user"] == ["Accepted input"]
+
+
+def test_cumulative_transcripts_keep_one_persisted_turn_id(env, monkeypatch):
+    async def generate(**kwargs):
+        if kwargs.get("pcm"):
+            yield {"kind": "transcript", "text": "I like"}
+            yield {"kind": "transcript", "text": "I like tea."}
+        yield {"kind": "text", "text": "Understood."}
+
+    monkeypatch.setattr(env.fake, "generate", generate)
+    user = register(env)
+    with env.client.websocket_connect(ticket(env, user)) as ws:
+        sid = start(ws)
+        receive(ws, "response.done")
+        ws.send_bytes(b"\x01\x00" * 8000)
+        ws.send_json({"type": "input.commit"})
+        first = receive(ws, "input.transcript")
+        second = receive(ws, "input.transcript")
+        assert first["text"] == "I like" and second["text"] == "I like tea."
+        assert first["turn_id"] == second["turn_id"]
+        receive(ws, "response.done")
+        end(ws)
+    turns = [turn for turn in detail(env, user, sid)["turns"] if turn["role"] == "user"]
+    assert len(turns) == 1
+    assert turns[0]["id"] == second["turn_id"] and turns[0]["text"] == second["text"]

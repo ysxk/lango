@@ -100,28 +100,29 @@ def enqueue_session(db, session, since):
     user = db.get(User, session.user_id, populate_existing=True)
     if not user.memory_enabled:
         return
-    turns = db.scalars(
-        select(Turn)
-        .where(
-            Turn.session_id == session.id,
-            Turn.role == "user",
-            Turn.created_at >= max(since, user.memory_since),
-        )
-        .order_by(Turn.created_at)
-        .limit(100)
-    ).all()
-    if turns:
-        db.add(
-            MemoryJob(
-                user_id=user.id,
-                epoch=user.memory_epoch,
-                payload={
-                    "messages": [
-                        {"role": "user", "content": t.text[:4000]} for t in turns if t.text
-                    ],
-                },
+    turns = list(
+        db.scalars(
+            select(Turn)
+            .where(
+                Turn.session_id == session.id,
+                Turn.role == "user",
+                Turn.created_at >= max(since, user.memory_since),
             )
-        )
+            .order_by(Turn.created_at, Turn.id)
+        ).all()
+    )
+    batch_size = 100
+    for i in range(0, len(turns), batch_size):
+        chunk = turns[i : i + batch_size]
+        messages = [{"role": "user", "content": t.text} for t in chunk if t.text]
+        if messages:
+            db.add(
+                MemoryJob(
+                    user_id=user.id,
+                    epoch=user.memory_epoch,
+                    payload={"messages": messages},
+                )
+            )
 
 
 def context_memories(db, user):

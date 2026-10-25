@@ -4,34 +4,22 @@
 
 ## 环境与产物
 
-- macOS arm64；Python 3.12.13（uv）；Flutter 3.47.8 / Dart 3.13.7；Temurin JDK 17.0.21。
-- Android compile/target SDK 36，最低 SDK 24（Android 7.0）；插件构建期间另安装 SDK 35、NDK 28.2.13676358、CMake 3.22.1。
-- Web：`app/build/web/`，由本机 HTTP 服务实际打开测试。
-- Android：`app/build/app/outputs/flutter-apk/app-debug.apk`，约 157 MiB，多架构 `arm64-v8a / armeabi-v7a / x86_64`，版本 `1.0.0+1`。
-- APK SHA-256：`9047a8042b412337cd5890aff7391cb9d2bdc064742996c8abd83979250ecf31`。此校验值仅适用于本次构建。
-- APK 使用开发签名，不是应用商店正式发布签名包。
+- macOS arm64；Python 3.12.13（uv）；Temurin JDK 17.0.21。
+- 服务端：FastAPI + Alembic + SQLAlchemy + Uvicorn。
+- 客户端代码：已根据要求标记为未开发并从代码库移除，接口规范见 `docs/protocol.md`。
 
 ## 自动化与构建
 
 | 检查 | 实际结果 |
 | --- | --- |
 | `cd server && uv run ruff check .` | 通过 |
-| `uv run ruff format --check .` | 通过，24 个文件 |
-| `uv run pytest` | **92 项通过** |
-| `cd app && flutter analyze` | 通过，无问题 |
-| `flutter test` | **17 项通过** |
-| `flutter build web` | 通过 |
-| `flutter build apk --debug` | 通过 |
-| `apksigner verify` | 通过 |
-| `zipalign -c -P 16 4` | 通过 |
-| APK 清单检查 | INTERNET、RECORD_AUDIO、MODIFY_AUDIO_SETTINGS 已打包；应用名 Lango |
+| `uv run ruff format --check .` | 通过，25 个文件 |
+| `uv run pytest` | **107 项全部通过** |
 | Compose（包括 public profile）配置解析 | 使用非真实凭证通过 |
+| 客户端代码状态 | **未开发 / 待实现**（已按需移出代码库） |
 
 服务端测试覆盖认证/邀请/刷新、权限隔离、输入约束、配额、单次 ticket、对话生命周期、播放确认、中断、模型错误脱敏、Live/cascade 替身、流式 JSON/TTS、记忆暂停/删除/旧任务失效、迁移与 worker。流式测试明确断言首音可在最后一个文本 chunk 之前产生，并验证取消后关闭上游流。
-
-客户端测试覆盖地址校验、首次启动与窄屏布局、并发令牌刷新、会话失效清理、切换服务器清理、暂停记忆保留事实、历史恢复 ID、生成完成与播放完成的区别、取消后迟到音频、播放失败不越序确认、拒绝麦克风后打字、后台暂停。
-
-Web 构建有 Cupertino fallback 字体提示，构建成功；已检查的页面未见缺失图标。Web 首次加载的中文 fallback 字体存在加载过程，截图以加载完成后的画面为准。
+客户端代码已根据需求标记为未开发，相关接口与协议规范见 [接口与语音协议](protocol.md)。
 
 ## 本地真实 HTTP / WebSocket 联调
 
@@ -74,7 +62,7 @@ Web 构建有 Cupertino fallback 字体提示，构建成功；已检查的页�
 
 1. **真实 Gemini**：没有配置轮换后的有效密钥，未运行真实文本/音频/Live/TTS，也未测付费配额、模型可用性、地区限制、音质与端到端延迟。供应商接口参数的 mock 测试不能替代真实调用。
 2. **模型驱动 Mem0 提取**：本地持久化 CRUD 和任务/遗忘语义已测；真实模型提取、embedding 质量和生产 pgvector 检索效果未测。
-3. **Android 真机**：ADB 没有设备，尚未安装运行；麦克风采样、外放回声、蓝牙、权限弹窗、锁屏/来电/后台生命周期与网络切换必须在手机上实测。APK 构建通过不代表这些通过。
+3. **客户端开发**：客户端当前标记为未开发状态，待后续实现或由第三方按协议接入。
 4. **容器部署**：本机无 Docker daemon，只有 Compose 配置校验；Docker 镜像构建、PostgreSQL/pgvector 容器运行、Caddy TLS 与公网部署未执行。仓库 CI 已配置，但未在远端运行。
 5. **正式发布签名**：维护者需配置自己的 Android 签名与发布渠道；当前 release 配置仍使用开发签名。
 
@@ -82,6 +70,6 @@ Web 构建有 Cupertino fallback 字体提示，构建成功；已检查的页�
 
 - 撤销之前公开过的模型密钥，在本机服务端环境文件填写新的密钥，切勿发到聊天或提交仓库。
 - 按 [自部署指南](self-hosting.md) 启动真实 API 与 worker。
-- USB 连接 Android 手机，开启调试；安装 APK，配置服务器地址。
+- 待客户端开发完成后，连接服务端测试。
 - 分别验证自由对话/角色扮演、PTT/自动静音、文字降级、打断与重连；再测暂停记忆、删除后不复活。
 - 在具备 Docker 的环境完成容器、数据库备份恢复与 HTTPS 验收。

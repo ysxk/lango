@@ -28,6 +28,7 @@ x-app: &app
     LANGO_DAILY_MINUTES: ${LANGO_DAILY_MINUTES:-60}
     LANGO_MEMORY_PATH: /data/memory
     MEM0_TELEMETRY: "false"
+    LANGO_TRUSTED_PROXIES: ${LANGO_TRUSTED_PROXIES:-127.0.0.1,172.28.0.10}
   volumes:
     - memory:/data/memory
   stop_grace_period: 30s
@@ -80,6 +81,9 @@ services:
       - "443:443/udp"
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+    networks:
+      default:
+        ipv4_address: 172.28.0.10
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -93,3 +97,9 @@ volumes:
   memory:
   caddy_data:
   caddy_config:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
